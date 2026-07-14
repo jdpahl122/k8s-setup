@@ -1,0 +1,45 @@
+# Local certificate authority for issuing ingress TLS certs.
+#
+# Chain: a self-signed bootstrap issuer signs a long-lived CA cert, and the
+# "local-ca" ClusterIssuer then signs a cert for each ingress host. Trust the CA
+# once (see scripts/export-ca-cert.sh) and every *.localtest.me cert is trusted.
+
+# 1. Bootstrap issuer — self-signs the CA certificate below.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+spec:
+  selfSigned: {}
+---
+# 2. The CA certificate itself. Stored in the cert-manager namespace, which is
+#    where ClusterIssuers read their CA key material from
+#    (--cluster-resource-namespace, default "cert-manager").
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: local-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: k8s-setup-local-ca
+  secretName: local-ca-key-pair
+  duration: 87600h # 10 years
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# 3. The CA ClusterIssuer that ingress certs reference via the
+#    cert-manager.io/cluster-issuer annotation.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: local-ca
+spec:
+  ca:
+    secretName: local-ca-key-pair

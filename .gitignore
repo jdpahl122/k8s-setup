@@ -4,3 +4,6 @@
 # kubeconfig / local creds
 kubeconfig
 *.kubeconfig
+
+# Exported local CA cert (public, but environment-specific — regenerate per machine)
+local-ca.crt

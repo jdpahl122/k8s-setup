@@ -217,3 +217,84 @@ kubectl port-forward -n vault svc/vault 8200:8200
 - **TLS**: `global.tlsDisable` is `true` here for local convenience — enable TLS
   (cert-manager) in production.
 - **HA**: production runs 3+ Raft nodes rather than a single standalone server.
+
+### Ingress + TLS (local HTTPS access)
+
+Services are reachable over HTTPS at `*.localtest.me` hostnames (that domain
+resolves to `127.0.0.1` via public DNS, so **no hosts-file editing is needed**):
+
+| URL | Backend |
+|-----|---------|
+| `https://ollama.localtest.me` | Ollama API (`ollama:11434`) |
+| `https://vault.localtest.me` | Vault UI/API (`vault:8200`) |
+
+Stack:
+
+- **ingress-nginx** — runs with **`hostNetwork: true`** and binds ports 80/443
+  (servicelb is disabled, so a LoadBalancer Service can't get an IP). `hostNetwork`
+  is required on NAT-mode WSL2: plain `hostPort` only creates iptables DNAT rules
+  (no listening socket), and WSL2's localhost→Windows forwarding relays *real
+  listening sockets* only — with `hostPort` alone the Windows browser gets
+  `ERR_CONNECTION_REFUSED` even though it works inside WSL2. `hostNetwork` makes
+  nginx bind real `0.0.0.0:80/443` sockets, which WSL2 forwards to the host.
+- **cert-manager** — a local self-signed **CA ClusterIssuer** (`local-ca`) issues
+  a TLS cert per ingress host. Trust the CA once and every `*.localtest.me` cert
+  is trusted.
+
+Files:
+
+| File | Purpose |
+|------|---------|
+| `apps/cert-manager/values.yaml` | Helm values for cert-manager |
+| `apps/cert-manager/local-ca.yaml` | self-signed → CA cert → `local-ca` ClusterIssuer |
+| `apps/ingress-nginx/values.yaml` | Helm values (hostPort 80/443, default class) |
+| `apps/ollama/ingress.yaml` | Ollama Ingress + TLS (streaming-friendly timeouts) |
+| `apps/vault/ingress.yaml` | Vault Ingress + TLS |
+| `scripts/ingress-tls-install.sh` | installs cert-manager + ingress-nginx + ingresses |
+| `scripts/export-ca-cert.sh` | exports the CA cert + prints trust instructions |
+
+#### Setup
+
+```bash
+./scripts/ingress-tls-install.sh   # cert-manager, ingress-nginx, ingresses, certs
+./scripts/export-ca-cert.sh        # -> ./local-ca.crt + how to trust it
+```
+
+Until the CA is trusted, browsers show a warning (the cert is valid, just signed
+by an untrusted local CA). `curl` works immediately with `--cacert local-ca.crt`.
+
+#### Troubleshooting: `ERR_CONNECTION_REFUSED` from the Windows browser
+
+If it works inside WSL2 (`curl --cacert local-ca.crt https://ollama.localtest.me`)
+but the Windows browser refuses:
+
+1. Confirm the controller is listening on real sockets (not just iptables):
+   ```bash
+   ss -tlnp | grep -E ':(80|443)\s'   # expect 0.0.0.0:80 and 0.0.0.0:443
+   ```
+   If empty, the controller isn't running with `hostNetwork: true` — re-apply
+   `apps/ingress-nginx/values.yaml`.
+2. If sockets exist but Windows still refuses, WSL2's localhost forwarding may be
+   stale. From a Windows terminal: `wsl --shutdown`, then restart WSL and re-run
+   `./scripts/vault-init-unseal.sh` (Vault comes back sealed after a restart).
+
+#### Trusting the CA
+
+`export-ca-cert.sh` writes `./local-ca.crt` (gitignored) and prints the exact
+commands. Summary:
+
+- **Windows / Chrome / Edge** (Admin PowerShell): import `local-ca.crt` into
+  `LocalMachine\Root`, or double-click → Install → Local Machine → *Trusted Root
+  Certification Authorities*.
+- **Firefox**: Settings → Certificates → Import, tick *Trust this CA to identify
+  websites*.
+
+Restart the browser afterward.
+
+#### Adding another app
+
+1. Add an `Ingress` (copy `apps/ollama/ingress.yaml`) with a
+   `cert-manager.io/cluster-issuer: local-ca` annotation, `ingressClassName:
+   nginx`, and a `tls` block for `myapp.localtest.me`.
+2. `kubectl apply` it — cert-manager auto-issues the cert from the local CA; no
+   hosts-file change needed.

@@ -1,0 +1,18 @@
+# cert-manager — issues TLS certs for cluster ingress.
+# Chart: jetstack/cert-manager v1.21.0
+
+# Install the cert-manager CRDs as part of the release.
+crds:
+  enabled: true
+
+# Single-node local cluster — one replica of each component is plenty.
+replicaCount: 1
+webhook:
+  replicaCount: 1
+cainjector:
+  replicaCount: 1
+
+resources:
+  requests:
+    cpu: "10m"
+    memory: 32Mi

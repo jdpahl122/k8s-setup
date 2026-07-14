@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ollama
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/component: server
+    app.kubernetes.io/part-of: ollama
+  annotations:
+    # cert-manager issues/renews the TLS cert from the local CA.
+    cert-manager.io/cluster-issuer: local-ca
+    # LLM responses stream and can run long; don't cut them off, and don't cap
+    # request body size (large prompts / model pulls via the API).
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - ollama.localtest.me
+      secretName: ollama-tls
+  rules:
+    - host: ollama.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ollama
+                port:
+                  number: 11434

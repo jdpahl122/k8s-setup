@@ -1,0 +1,58 @@
+# ingress-nginx controller for the local k3s cluster.
+# Chart: ingress-nginx/ingress-nginx 4.15.1
+#
+# servicelb (klipper) is disabled on this cluster, so a LoadBalancer Service
+# would sit Pending forever. Instead we bind the controller directly to the
+# node's host ports 80/443. On WSL2 those are reachable from the Windows host
+# via localhost forwarding, so https://<host>.localtest.me resolves to 127.0.0.1
+# and lands on the controller.
+
+controller:
+  kind: Deployment
+  replicaCount: 1
+
+  # hostPort 80/443 can only be bound by one pod per node, so a surging rollout
+  # deadlocks (new pod Pending on the ports the old pod still holds). maxSurge: 0
+  # forces the old pod down before the new one starts (brief blip on a rollout).
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+
+  # Run in the node's network namespace so nginx binds REAL listening sockets on
+  # 0.0.0.0:80/443. On NAT-mode WSL2 this is required: hostPort alone only sets up
+  # iptables DNAT (no socket), which WSL2's localhost->Windows forwarding does not
+  # relay — so the Windows browser gets ERR_CONNECTION_REFUSED. hostNetwork sockets
+  # ARE forwarded, so https://*.localtest.me works from the Windows host.
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+
+  # With hostNetwork the container ports already ARE the node ports; keep hostPort
+  # declared for clarity/consistency.
+  hostPort:
+    enabled: true
+    ports:
+      http: 80
+      https: 443
+
+  # No LoadBalancer/NodePort needed — hostPort handles ingress traffic.
+  service:
+    enabled: true
+    type: ClusterIP
+
+  # Make this the cluster default IngressClass so Ingresses without an explicit
+  # class still work.
+  ingressClassResource:
+    name: nginx
+    enabled: true
+    default: true
+  watchIngressWithoutClass: true
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: 256Mi
+    limits:
+      # 256Mi OOMKills the controller on startup; give it real headroom.
+      memory: 512Mi
