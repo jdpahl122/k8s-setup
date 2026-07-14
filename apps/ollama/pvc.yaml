@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/component: model-store
+    app.kubernetes.io/part-of: ollama
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # local-path is the default StorageClass on this k3s node; volume is bound to
+  # the node's disk (WaitForFirstConsumer), which is fine for a single-node cluster.
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 50Gi

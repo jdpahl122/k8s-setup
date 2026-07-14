@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/component: server
+    app.kubernetes.io/part-of: ollama
+spec:
+  # Single GPU on this node (nvidia.com/gpu: 1) → at most one pod can schedule.
+  # Keep replicas at 1 and use Recreate so a rollout releases the GPU before the
+  # new pod tries to claim it (RollingUpdate would deadlock on the single device).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ollama
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ollama
+        app.kubernetes.io/component: server
+        app.kubernetes.io/part-of: ollama
+    spec:
+      # Required on this k3s cluster: the default runtime is runc, so the GPU is
+      # only visible to pods pinned to the auto-created "nvidia" RuntimeClass.
+      runtimeClassName: nvidia
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.32.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            # Keep a model resident for an hour after last use to avoid reloading
+            # weights into the 8 GB RTX 2070 on every request.
+            - name: OLLAMA_KEEP_ALIVE
+              value: "1h"
+            # 8 GB VRAM only fits one small/quantized model at a time.
+            - name: OLLAMA_MAX_LOADED_MODELS
+              value: "1"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 2Gi
+            limits:
+              # The GPU limit must be set for the device plugin to attach the GPU;
+              # requests are auto-mirrored from limits for extended resources.
+              nvidia.com/gpu: 1
+              cpu: "4"
+              memory: 8Gi
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+          startupProbe:
+            # First boot pulls no model but the server can be slow to bind; give
+            # it generous headroom before liveness takes over.
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 15
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models
