@@ -1,0 +1,6 @@
+# Vault initialization output — unseal keys + root token. NEVER commit.
+.vault/
+
+# kubeconfig / local creds
+kubeconfig
+*.kubeconfig

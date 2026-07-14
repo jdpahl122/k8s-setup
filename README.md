@@ -120,3 +120,100 @@ kubectl exec -n ollama deploy/ollama -- nvidia-smi
 # A loaded model should report "100% GPU" placement
 kubectl exec -n ollama deploy/ollama -- ollama ps
 ```
+
+### Secrets: Vault + External Secrets Operator
+
+Secret storage is **HashiCorp Vault** (standalone, file storage), and workloads
+consume secrets via the **External Secrets Operator (ESO)** with Vault as the
+backend. No secret values are ever written into manifests — manifests reference
+only Vault *paths*, and ESO authenticates to Vault with the **kubernetes auth
+method** (short-lived bound ServiceAccount tokens, no static token anywhere).
+
+Files:
+
+| File | Purpose |
+|------|---------|
+| `apps/vault/values.yaml` | Helm values for Vault (standalone, file storage, PVC) |
+| `apps/external-secrets/vault-auth.yaml` | Auth ServiceAccount + RBAC for ESO→Vault |
+| `apps/external-secrets/cluster-secret-store.yaml` | `ClusterSecretStore` → Vault (paths only, no values) |
+| `apps/external-secrets/example-externalsecret.yaml` | Demo: sync `secret/demo` → k8s Secret |
+| `scripts/vault-install.sh` | `helm install` Vault |
+| `scripts/vault-init-unseal.sh` | Init + unseal (also re-run to unseal after a restart) |
+| `scripts/eso-install.sh` | `helm install` ESO + apply auth SA/RBAC |
+| `scripts/vault-configure-eso.sh` | Enable KV/auth, write policy+role, wire the store |
+
+#### First-time setup
+
+Run in order:
+
+```bash
+./scripts/vault-install.sh        # 1. install Vault (comes up sealed)
+./scripts/vault-init-unseal.sh    # 2. init + unseal
+./scripts/eso-install.sh          # 3. install ESO + auth SA/RBAC
+./scripts/vault-configure-eso.sh  # 4. KV engine, k8s auth, policy/role, ClusterSecretStore
+```
+
+> **⚠️ Unseal keys + root token** are written to `.vault/init.json` (chmod 600,
+> **gitignored**). This is the only copy — back it up somewhere safe. Losing it
+> means losing access to Vault; committing it defeats the entire point.
+
+#### After a restart (WSL2 reboot / pod restart)
+
+Vault comes back **sealed** and must be unsealed manually — this is expected for
+a standalone server. Just re-run:
+
+```bash
+./scripts/vault-init-unseal.sh    # detects it's already initialized, only unseals
+```
+
+#### Using it — store a secret, consume it in a workload
+
+1. **Write a secret to Vault** (nothing goes into git):
+
+   ```bash
+   ROOT_TOKEN=$(python3 -c "import json;print(json.load(open('.vault/init.json'))['root_token'])")
+   kubectl exec -n vault vault-0 -- \
+     env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$ROOT_TOKEN" \
+     vault kv put secret/myapp api_key=abc123 db_password=hunter2
+   ```
+
+2. **Create an `ExternalSecret`** referencing the path (see
+   `apps/external-secrets/example-externalsecret.yaml` as a template). ESO writes
+   a native k8s `Secret` your pods mount as env vars or files:
+
+   ```yaml
+   apiVersion: external-secrets.io/v1
+   kind: ExternalSecret
+   metadata:
+     name: myapp-secrets
+     namespace: default
+   spec:
+     refreshInterval: "1m"
+     secretStoreRef:
+       kind: ClusterSecretStore
+       name: vault-backend
+     target:
+       name: myapp-secrets
+       creationPolicy: Owner
+     dataFrom:
+       - extract:
+           key: myapp          # pulls every key/value under secret/myapp
+   ```
+
+Updates in Vault propagate to the k8s Secret within `refreshInterval` (verified:
+rotating a Vault value re-syncs automatically).
+
+#### Vault UI
+
+```bash
+kubectl port-forward -n vault svc/vault 8200:8200
+# open http://localhost:8200 — log in with the root token from .vault/init.json
+```
+
+#### Production differences (this is a local mirror)
+
+- **Auto-unseal**: production uses AWS KMS auto-unseal (via IRSA) instead of
+  manual unseal; wire `seal "awskms"` into the server config.
+- **TLS**: `global.tlsDisable` is `true` here for local convenience — enable TLS
+  (cert-manager) in production.
+- **HA**: production runs 3+ Raft nodes rather than a single standalone server.

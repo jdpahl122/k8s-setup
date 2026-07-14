@@ -1,0 +1,47 @@
+# ServiceAccount that ESO authenticates to Vault as (via the kubernetes auth
+# method). No token is stored anywhere: ESO mints a short-lived, bound token for
+# this SA via the TokenRequest API at sync time and hands it to Vault, which
+# verifies it with a TokenReview and maps it to the Vault "external-secrets" role.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-eso-auth
+  namespace: external-secrets
+  labels:
+    app.kubernetes.io/name: external-secrets
+    app.kubernetes.io/component: vault-auth
+    app.kubernetes.io/part-of: external-secrets
+---
+# Allow the ESO controller SA to mint tokens for the auth SA above.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vault-eso-token-creator
+  namespace: external-secrets
+  labels:
+    app.kubernetes.io/name: external-secrets
+    app.kubernetes.io/component: vault-auth
+    app.kubernetes.io/part-of: external-secrets
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["vault-eso-auth"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vault-eso-token-creator
+  namespace: external-secrets
+  labels:
+    app.kubernetes.io/name: external-secrets
+    app.kubernetes.io/component: vault-auth
+    app.kubernetes.io/part-of: external-secrets
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vault-eso-token-creator
+subjects:
+  - kind: ServiceAccount
+    name: external-secrets
+    namespace: external-secrets

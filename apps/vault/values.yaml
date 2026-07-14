@@ -1,0 +1,55 @@
+# HashiCorp Vault — standalone server for the local single-node k3s cluster.
+# Chart: hashicorp/vault 0.34.0
+#
+# Standalone mode with the file storage backend on a persistent local-path PVC:
+# real seal/unseal crypto (not dev mode), data survives pod/host restarts.
+# Requires manual unseal after each restart — see scripts/vault-init-unseal.sh.
+
+global:
+  # Local cluster only: no in-cluster TLS. Vault is reached over http within the
+  # cluster. In production this would be false with proper certs (cert-manager).
+  tlsDisable: true
+
+# We consume secrets via External Secrets Operator, not the Agent Injector.
+injector:
+  enabled: false
+
+server:
+  # UI available via `kubectl port-forward -n vault svc/vault 8200:8200`.
+  ui:
+    enabled: true
+
+  # The chart binds the Vault ServiceAccount to system:auth-delegator so the
+  # kubernetes auth method can call the TokenReview API. Keep enabled.
+  authDelegator:
+    enabled: true
+
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+
+      listener "tcp" {
+        tls_disable     = 1
+        address         = "[::]:8200"
+        cluster_address = "[::]:8201"
+      }
+
+      storage "file" {
+        path = "/vault/data"
+      }
+
+  # Persistent storage for the file backend.
+  dataStorage:
+    enabled: true
+    size: 5Gi
+    storageClass: local-path
+    accessMode: ReadWriteOnce
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
